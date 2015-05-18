@@ -100,13 +100,15 @@
   [SNDBUF = 11]
   [RCVBUF = 12]
   [RCVMORE = 13]
+  [FD = 14]
+  [EVENTS = 15]
   [SNDHWM = 23]
   [RCVHWM = 24])
 (define-zmq-bitmask _int _send/recv-flags send/recv-flags?
   [DONTWAIT = 1]
   [NOBLOCK = 1] ; NOBLOCK has been replaced with DONTWAIT, leaving in for compatibility
   [SNDMORE = 2])
-(define-zmq-bitmask _short _poll-status poll-status?
+(define-zmq-bitmask _int _poll-status poll-status?
   [POLLIN = 1]
   [POLLOUT = 2]
   [POLLERR = 4])
@@ -402,7 +404,7 @@
             (define-zmq* [_type-external internal]
               (_fun _socket _option-name
                     [option-value : (_ptr o _type)]
-                    [option-size : (_ptr o _size_t)]
+                    [option-size : (_ptr io _size_t) = (ctype-sizeof _type)]
                     -> [err : _int]
                     -> (if (zero? err)
                            option-value
@@ -434,6 +436,10 @@
            RCVMORE MCAST_LOOP]
    [_int64 (λ (x) x) exact-integer?
            RATE RECOVERY_IVL]
+   [_int (λ (x) x) exact-integer?
+         FD]
+   [_poll-status (λ (x) x) poll-status?
+                 EVENTS]
    [_uint64 (λ (x) x) exact-nonnegative-integer?
             SNDHWM RCVHWM AFFINITY SNDBUF RCVBUF])
   (IDENTITY))
@@ -498,19 +504,71 @@
   (_fun _msg-pointer _socket _send/recv-flags
         -> [bytes-sent : _int] -> (if (negative? bytes-sent) (zmq-error) bytes-sent)))
 
-(define (socket-send! s bs)
-  (define m (make-msg-with-data bs))
+;;;; helpers for blocking send and receive that don't block other threads
+(define scheme-fd-to-semaphore
+  (get-ffi-obj "scheme_fd_to_semaphore" #f
+               (_fun _int _int _int -> _scheme)))
+
+(define (thread-wait-read fd)
+  ;; MZFD_CREATE_READ = 1
+  ;; is_socket = 1
+  (semaphore-wait/enable-break (scheme-fd-to-semaphore fd 1 1)))
+
+(define (wait socket poll-event)
+  (define e (socket-option socket 'EVENTS))
+  (unless (member poll-event e)
+    (define fd (socket-option socket 'FD))
+    (thread-wait-read fd)
+    (wait socket poll-event)))
+
+(define/contract (retry on-block act)
+  (procedure? (c:-> integer?) . c:-> . any/c)
+  (define (handle-err e)
+    (cond [(= e (lookup-errno 'EINTR))
+           (retry on-block act)]
+          [(= e (lookup-errno 'EAGAIN))
+           ;; assumes 'EWOULDBLOCK is the same as 'EAGAIN,
+           ;; because lookup-errno doesn't support 'EWOULDBLOCK
+           (on-block)
+           (retry on-block act)]
+          [else (zmq-error)]))
+  (define result (act))
+  (if (= -1 result)
+      (handle-err (errno))
+      result))
+;;;; end helpers
+
+(define (call-with-message act #:data [data #f])
+  (define m (malloc-msg))
   (dynamic-wind
    void
-   (λ () (socket-send-msg! m s empty) (void))
    (λ ()
-     (msg-close! m)
-     (free m))))
+     (cond [data
+            (define len (bytes-length data))
+            (msg-init-size! m len)
+            (memcpy (msg-data-pointer m) data len)]
+           [else (msg-init! m)])
+     (dynamic-wind
+       void
+       (λ () (act m))
+       (λ () (msg-close! m))))
+   (λ () (free m))))
+
+(define-zmq*
+  [socket-send-msg-internal! zmq_msg_send]
+  (_fun _msg-pointer _socket _send/recv-flags -> _int))
+
+(define (socket-send! s bs #:flags [flags '()])
+  (call-with-message #:data bs
+   (λ (m)
+     (void
+      (retry (λ () (wait s 'POLLOUT))
+             (λ () (socket-send-msg-internal! m s `(DONTWAIT ,@flags))))))))
 (provide/doc
  [proc-doc/names
-  socket-send! (c:-> socket? bytes? void)
-  (socket bytes)
-  @{Sends a byte string on a socket using @racket[socket-send-msg!] and a temporary message.}])
+  socket-send! (->* (socket? bytes?) (#:flags (and/c send/recv-flags? list?)) void?)
+  ((socket bytes) ((flags '())))
+  @{Sends a byte string on a socket using @link["http://api.zeromq.org/4-0:zmq_msg_send"]{zmq_msg_send} with @racket['DONTWAIT] and a temporary message. Does not block other Racket threads.}])
 
 (define-zmq
   [socket-recv-msg! zmq_msg_recv]
@@ -518,21 +576,21 @@
   (_fun _msg-pointer _socket _send/recv-flags
         -> [bytes-recvd : _int] -> (when (negative? bytes-recvd) (zmq-error))))
 
+(define-zmq*
+  [socket-recv-msg-internal! zmq_msg_recv]
+  (_fun _msg-pointer _socket _send/recv-flags -> _int))
+
 (define (socket-recv! s)
-  (define m (malloc-msg))
-  (msg-init! m)
-  (socket-recv-msg! m s empty)
-  (dynamic-wind
-   void
-   (λ () (bytes-copy (msg-data m)))
-   (λ ()
-     (msg-close! m)
-     (free m))))
+  (call-with-message
+   (λ (m)
+     (retry (λ () (wait s 'POLLIN))
+            (λ () (socket-recv-msg-internal! m s 'DONTWAIT)))
+     (bytes-copy (msg-data m)))))
 (provide/doc
  [proc-doc/names
   socket-recv! (c:-> socket? bytes?)
   (socket)
-  @{Receives a byte string on a socket using @racket[socket-recv-msg!] and a temporary message.}])
+  @{Receives a byte string on a socket using @link["http://api.zeromq.org/4-0:zmq_msg_recv"]{zmq_msg_recv} with @racket['DONTWAIT] and a temporary message. Does not block other Racket threads.}])
 
 (define-zmq
   [poll! zmq_poll]
