@@ -103,7 +103,8 @@
   [FD = 14]
   [EVENTS = 15]
   [SNDHWM = 23]
-  [RCVHWM = 24])
+  [RCVHWM = 24]
+  [LAST_ENDPOINT = 32])
 (define-zmq-bitmask _int _send/recv-flags send/recv-flags?
   [DONTWAIT = 1]
   [NOBLOCK = 1] ; NOBLOCK has been replaced with DONTWAIT, leaving in for compatibility
@@ -395,7 +396,7 @@
   (syntax-case stx ()
     [(_ [external internal]
         ([_type after type? opt ...] ...)
-        (byte-opt ...))
+        ([byte-opt byte-opt-size] ...))
      (with-syntax ([(_type-external ...) (generate-temporaries #'(_type ...))])
        (syntax/loc stx
          (begin
@@ -411,9 +412,10 @@
                            (zmq-error))))
             ...
             (define-zmq* [byte-external internal]
-              (_fun _socket _option-name
-                    [option-value : (_bytes o 255)]
-                    [option-size : (_ptr o _size_t)]
+              (_fun _socket
+                    [oname : _option-name]
+                    [option-value : (_bytes o (case oname [(byte-opt) byte-opt-size] ...))]
+                    [option-size : (_ptr io _size_t) = (case oname [(byte-opt) byte-opt-size] ...)]
                     -> [err : _int]
                     -> (if (zero? err)
                            (subbytes option-value 0 option-size)
@@ -442,7 +444,7 @@
                  EVENTS]
    [_uint64 (λ (x) x) exact-nonnegative-integer?
             SNDHWM RCVHWM AFFINITY SNDBUF RCVBUF])
-  (IDENTITY))
+  ([IDENTITY 255] [LAST_ENDPOINT 1024]))
 
 (define-syntax (define-zmq-set-socket-options! stx)
   (syntax-case stx ()
@@ -485,7 +487,7 @@
                    RATE RECOVER_IVL]
    [boolean? (λ (x) (if x 1 0)) _int64
              MCAST_LOOP])
-  (IDENTITY SUBSCRIBE UNSUBSCRIBE))
+  (IDENTITY SUBSCRIBE UNSUBSCRIBE LAST_ENDPOINT))
 
 (define-zmq
   [socket-bind! zmq_bind]
