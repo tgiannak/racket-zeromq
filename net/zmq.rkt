@@ -1,5 +1,5 @@
 #lang at-exp racket/base
-(require ffi/unsafe
+(require (rename-in ffi/unsafe (_fun _fun-orig))
          racket/list
          racket/stxparam
          racket/splicing
@@ -13,6 +13,9 @@
 (require/doc racket/base
              (for-label (except-in racket/contract ->))
              scribble/manual)
+
+(define-syntax-rule (_fun arg ...)
+  (_fun-orig #:save-errno 'posix arg ...))
 
 (define zmq-lib (ffi-lib "libzmq"))
 
@@ -164,9 +167,8 @@
   (pi) @{Extracts the @litchar{revents} field from a poll item structure.}])
 
 ;; Errors
-(define-zmq*
-  [errno zmq_errno]
-  (_fun -> _int))
+(define (errno) (saved-errno))
+
 (define-zmq*
   [strerro zmq_strerror]
   (_fun _int -> _string))
