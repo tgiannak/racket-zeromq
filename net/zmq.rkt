@@ -175,7 +175,7 @@
   (syntax-case stx ()
     [(_)
      (quasisyntax/loc stx
-       (error '#,(syntax-parameter-value #'current-zmq-fun) 
+       (error '#,(syntax-parameter-value #'current-zmq-fun)
               "~a: ~a"
               (errno)
               (strerro (errno))))]))
