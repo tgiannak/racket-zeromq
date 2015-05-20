@@ -519,12 +519,12 @@
   ;; is_socket = 1
   (semaphore-wait (scheme-fd-to-semaphore fd 1 1)))
 
-(define (wait socket poll-event)
+(define (wait-until-socket-ready socket poll-event)
   (define e (socket-option socket 'EVENTS))
   (unless (member poll-event e)
     (define fd (socket-option socket 'FD))
     (thread-wait-read fd)
-    (wait socket poll-event)))
+    (wait-until-socket-ready socket poll-event)))
 
 (define/contract (retry on-block act)
   (procedure? (c:-> integer?) . c:-> . any/c)
@@ -625,7 +625,7 @@
   (call-with-message #:data bs
    (λ (m)
      (void
-      (retry (λ () (wait s 'POLLOUT))
+      (retry (λ () (wait-until-socket-ready s 'POLLOUT))
              (λ () (socket-send-msg-internal! m s (cons 'DONTWAIT flag-list))))))))
 (provide/doc
  [proc-doc/names
@@ -646,7 +646,7 @@
 (define (socket-recv! s)
   (call-with-message
    (λ (m)
-     (retry (λ () (wait s 'POLLIN))
+     (retry (λ () (wait-until-socket-ready s 'POLLIN))
             (λ () (socket-recv-msg-internal! m s 'DONTWAIT)))
      (bytes-copy (msg-data m)))))
 (provide/doc
