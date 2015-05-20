@@ -560,15 +560,54 @@
   [socket-send-msg-internal! zmq_msg_send]
   (_fun _msg-pointer _socket _send/recv-flags -> _int))
 
+(module+ test
+  (require (submod ".."))
+  (define expected-request (string->bytes/utf-8 "hello"))
+  (define expected-request2 (string->bytes/utf-8 "world"))
+  (define expected-response (string->bytes/utf-8 "goodybe moon"))
+  (define endpoint "tcp://127.0.0.1:*")
+  (test-case "socket-send! and socket-recv!"
+    (define server
+      (thread
+       (λ ()
+         (define full-endpoint (thread-receive))
+         (call-with-context
+          (λ (ctx)
+            (call-with-socket ctx 'REP
+              (λ (s)
+                (socket-connect! s full-endpoint)
+                (define request (socket-recv! s))
+                (check-equal? expected-request request)
+                (define request2 (socket-recv! s))
+                (check-equal? expected-request2 request2)
+                (socket-send! s expected-response))))))))
+    (define client
+      (thread
+       (λ ()
+         (call-with-context
+          (λ (ctx)
+            (call-with-socket ctx 'REQ
+              (λ (s)
+                (socket-bind! s endpoint)
+                (define full-endpoint (bytes->string/utf-8 (socket-option s 'LAST_ENDPOINT)))
+                (thread-send server full-endpoint)
+                (socket-send! s expected-request #:flags 'SNDMORE)
+                (socket-send! s expected-request2)
+                (define response (socket-recv! s))
+                (check-equal? expected-response response))))))))
+    (thread-wait server)
+    (thread-wait client)))
+
 (define (socket-send! s bs #:flags [flags '()])
+  (define flag-list (if (list? flags) flags (list flags)))
   (call-with-message #:data bs
    (λ (m)
      (void
       (retry (λ () (wait s 'POLLOUT))
-             (λ () (socket-send-msg-internal! m s `(DONTWAIT ,@flags))))))))
+             (λ () (socket-send-msg-internal! m s (cons 'DONTWAIT flag-list))))))))
 (provide/doc
  [proc-doc/names
-  socket-send! (->* (socket? bytes?) (#:flags (and/c send/recv-flags? list?)) void?)
+  socket-send! (->* (socket? bytes?) (#:flags send/recv-flags?) void?)
   ((socket bytes) ((flags '())))
   @{Sends a byte string on a socket using @link["http://api.zeromq.org/4-0:zmq_msg_send"]{zmq_msg_send} with @racket['DONTWAIT] and a temporary message. Does not block other Racket threads.}])
 
