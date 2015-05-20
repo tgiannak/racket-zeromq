@@ -516,7 +516,7 @@
 (define (thread-wait-read fd)
   ;; MZFD_CREATE_READ = 1
   ;; is_socket = 1
-  (semaphore-wait/enable-break (scheme-fd-to-semaphore fd 1 1)))
+  (semaphore-wait (scheme-fd-to-semaphore fd 1 1)))
 
 (define (wait socket poll-event)
   (define e (socket-option socket 'EVENTS))
