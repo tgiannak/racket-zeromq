@@ -1,5 +1,6 @@
 #lang at-exp racket/base
 (require (rename-in ffi/unsafe (_fun _fun-orig))
+         ffi/unsafe/alloc
          racket/list
          racket/stxparam
          racket/splicing
@@ -540,23 +541,42 @@
   (if (= -1 result)
       (handle-err (errno))
       result))
+
+(define (malloc-msg/gc)
+  (let ([_msg-ctype (malloc _msg 'atomic-interior)])
+    (set-cpointer-tag! _msg-ctype msg-tag)
+    _msg-ctype))
+
+(define msg-close*
+  ((deallocator) msg-close!))
+
+(define make-msg*
+  ((allocator msg-close*)
+   (λ ()
+     (define msg (malloc-msg/gc))
+     (msg-init! msg)
+     msg)))
+
+(define make-msg/size*
+  ((allocator msg-close*)
+   (λ (size)
+     (define msg (malloc-msg/gc))
+     (msg-init-size! msg size)
+     msg)))
+
+(define (make-msg/data* data)
+  (define len (bytes-length data))
+  (define m (make-msg/size* len))
+  (memcpy (msg-data-pointer m) data len)
+  m)
 ;;;; end helpers
 
 (define (call-with-message act #:data [data #f])
-  (define m (malloc-msg))
-  (dynamic-wind
-   void
-   (λ ()
-     (cond [data
-            (define len (bytes-length data))
-            (msg-init-size! m len)
-            (memcpy (msg-data-pointer m) data len)]
-           [else (msg-init! m)])
-     (dynamic-wind
-       void
-       (λ () (act m))
-       (λ () (msg-close! m))))
-   (λ () (free m))))
+  (define m (cond [data (make-msg/data* data)]
+                  [else (make-msg*)]))
+  (define result (act m))
+  (msg-close* m)
+  result)
 
 (define-zmq*
   [socket-send-msg-internal! zmq_msg_send]
