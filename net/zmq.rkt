@@ -121,7 +121,7 @@
 (define _size_t _int)
 (define _uchar _uint8)
 
-(require (for-syntax racket/base syntax/parse unstable/syntax))
+(require (for-syntax racket/base syntax/parse))
 (define-syntax (define-cvector-type stx)
   (syntax-parse
    stx
@@ -704,7 +704,7 @@
   (proxy* frontend backend capture))
 (provide/doc
  [proc-doc/names
-  proxy! (->* (socket/c socket/c) ((or/c socket/c false?)) void)
+  proxy! (->* (socket? socket?) ((or/c socket? false?)) void)
   ([frontend backend] [(capture #f)])
   @{An FFI binding for @link["http://api.zeromq.org/3-2:zmq_proxy.html"]{zmq_proxy}.
    Given two sockets and an optional capture socket, set up a proxy between
